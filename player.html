@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Karaoke</title>
+
+  <link href="css/video-js.css" rel="stylesheet" type="text/css">
+  <script src="https://cdn.firebase.com/v0/firebase.js"></script>
+  <script src="js/jquery.min.js"></script>
+
+  <!-- LOAD VIDEO.JS SOURCE FILES IN ORDER -->
+  <script src="js/video.dev.js"></script>
+  <script type='text/javascript' src='https://cdn.firebase.com/v0/firebase-simple-login.js'></script>
+
+  <script>
+
+  function getQueryVariable(variable) {
+    var query = window.location.search.substring(1);
+    var vars = query.split("&amp;");
+    for (var i=0;i<vars.length;i++) {
+      var pair = vars[i].split("=");
+      if (pair[0] == variable) {
+        return pair[1];
+      }
+    }
+    return -1;
+  }
+  var room = getQueryVariable("room");
+  if (room == -1 || room == '') {
+  	document.location = "index.html";
+  }
+  </script>
+  <style>
+  .yt-container {
+	position: fixed;
+	left: 0;
+	top: 0;
+	background: #000;
+	font-family: Helvetica, Arial;
+	text-align: left;
+	vertical-align: top;
+	text-indent: 0;
+  }
+  </style>
+</head>
+<body>
+	<div id="normal_players">
+	<!-- Add "controls" to the <video or <audio tag to show controls for debug reason -->
+	<video id="vid1" class="video-js vjs-default-skin" preload="auto"
+		width=100% height=100% poster="">
+    	<source src="" type='video/mp4'>
+    	<p>Video Playback Not Supported</p>
+  	</video>
+	<audio id="aud1" preload="auto">
+		<source src="" type='audio/mpeg'>
+	</audio>
+	</div>
+	<div id="player" class="yt-container" style="display:none"></div>
+	<script src="https://www.youtube.com/player_api"></script>
+
+<script>
+	var roomUrl = 'https://danioyuan.firebaseio.com/karaoke/rooms/' + encodeURIComponent(room);
+    var playListRef = new Firebase(roomUrl + '/playlist');
+    var playPosNameRef = new Firebase(roomUrl + '/playposname');
+	var auth = new FirebaseSimpleLogin(playListRef, function(error, user) {
+	});
+    var vocalRef = new Firebase(roomUrl + '/vocal');
+    var volumeRef = new Firebase(roomUrl + '/volume');
+	var vid1 = vjs('vid1');
+	var aud1 = document.getElementById('aud1');
+	var root = "https://dl.dropboxusercontent.com/u/230430262/karamp4/";
+
+	var playList = [];
+	var playPosName = '';
+	var newPlayPosName = '';
+	var playPos = -1;
+	var playing = false;
+	var vocal = false;
+	var volume = 100;
+	var currentName = "";
+	var playingYoutube = false;
+	var playCount = 0; // Record how many videos have been played.
+
+	// Youtube player related functions
+	var player = null;
+    function onYouTubePlayerAPIReady() {
+        player = new YT.Player('player', {
+          height: $(window).height(),
+          width: $(window).width(),
+          videoId: '',
+          events: {
+            'onReady': onPlayerReady,
+            'onStateChange': onPlayerStateChange
+          }
+        });
+    }
+
+	// autoplay video
+    function onPlayerReady(event) {
+        event.target.playVideo();
+    }
+
+    // when video ends
+    function onPlayerStateChange(event) {        
+        if(event.data === 0) {            
+            if (playPos < playList.length - 1) {
+				playPosNameRef.set(playList[playPos + 1].name);
+			} else {
+				playPosNameRef.set(playList[0].name);
+			}
+        }
+    }
+
+	function mutePlayers() {
+		aud1.volume = 0;
+		vid1.volume(0);
+		console.log("players muted.")
+	}
+
+	function adjustVolume(volumeVal, useVocal) {
+		if (!useVocal) {
+			aud1.volume = 0;
+			vid1.volume(volumeVal / 100);
+		} else {
+			aud1.volume = volumeVal / 100;
+			vid1.volume(0);
+		}
+		try {
+			player.setVolume(volumeVal);
+		}
+	    catch (err) {
+	   		console.log("YT player not ready: " + err.message);
+	   	}
+	}
+	
+	function clearPlayers() {
+		vid1.src([ { type: 'video/mp4', src: '' } ]);
+		aud1.setAttribute('src', '');
+		playing = false;
+		console.log("players cleared.")
+	}
+
+	function clearYoutubePlayer() {
+		try {
+			player.loadVideoById('', 0, "small");
+		}
+		catch (err) {
+	   		console.log("YT player not ready: " + err.message);
+	   	}
+		playing = false;
+	}
+
+	function playSongByPos(i) {
+		console.log("PlaySongByPos " + i);
+		console.log("Current Pos: " + playPos + "; Current Name: " + playPosName);
+		if (playList.length < 1 || i < 0) { return; }
+		if (i >= playList.length) { i = 0; }
+		playPos = i;
+		playPosName = playList[i].name;
+		if (playList[i].type == "video/youtube") {
+			if (playCount == 0)
+				timeOut = 3000;
+			else
+				timeOut = 10;
+			setTimeout(function () {
+				console.log("Playing youtube: " + playList[i].vid);
+				clearPlayers();
+				$("#normal_players").hide();
+				$("#player").show();
+				try {
+					playingYoutube = true;
+					player.setVolume(volume);
+					player.loadVideoById(playList[i].vid, 0, "small");
+					playCount ++;
+				}
+			    catch (err) {
+			   		console.log("YT player not ready: " + err.message);
+			   	}
+			}, timeOut);
+//			document.location = "youtube_player.html?room=" + encodeURIComponent(room);
+		} else {
+			$("#player").hide();
+			$("#normal_players").show();
+			try {
+				player.stopVideo();
+			}
+		    catch (err) {
+		   		console.log("YT player not ready: " + err.message);
+		   	}
+			playingYoutube = false;
+			vid1.src([ { type: playList[i].type, src: playList[i].src } ]);
+			aud1.setAttribute('src', playList[i].src.replace('.mp4', '.mp3'));
+			adjustVolume(volume, vocal);
+			vid1.play();
+			playCount ++;
+		}
+		playing = true;
+		console.log("Current Pos: " + playPos + "; Current Name: " + playPosName);
+	}
+
+	function playSongByRefName(itemName) {
+		console.log("PlaySongByName " + itemName);
+		console.log("Length: " + playList.length + "; Current Pos: " + playPos + "; Current Name: " + playPosName);
+		if (itemName == '') {
+			clearPlayers();
+			return;
+		}
+		if (itemName == playPosName) {
+			console.log("Playing name: " + playList[playPos].name);
+			return;
+		}
+		var i;
+		for (i = 0; i < playList.length; i ++) {
+			if (playList[i].name == itemName) { break; }
+		}
+		if (i < playList.length) {
+			playSongByPos(i);
+		}
+	}
+
+	////////////////////////////////////////////////////////////
+	// Firebase volume change related functions
+	volumeRef.on('value', function(dataSnapshot) {
+		volume = dataSnapshot.val();
+		console.log("Firebase set volume to " + volume);
+		adjustVolume(volume, vocal);
+	});
+
+	////////////////////////////////////////////////////////////
+	// Firebase vocal change related functions
+	vocalRef.on('value', function(dataSnapshot) {
+		vocal = dataSnapshot.val();
+		adjustVolume(volume, vocal);
+	});
+
+	////////////////////////////////////////////////////////////
+	// Firebase play position change related functions
+	playPosNameRef.on('value', function(dataSnapshot) {
+		newPlayPosName = dataSnapshot.val();
+		playSongByRefName(newPlayPosName);
+	});
+
+	////////////////////////////////////////////////////////////
+	// Firebase playlist change related functions
+	function handleItemAdded(itemSnapshot, prevItemName) {
+		var itemName = itemSnapshot.name();
+		if (itemSnapshot.val().path) {
+			playList.push({name: itemName, type: "video/mp4", src: root + encodeURIComponent(itemSnapshot.val().path) + ".mp4"});
+		} else {
+			playList.push({name: itemName, type: "video/youtube", vid: itemSnapshot.val().vid});
+		}
+		if (itemName == newPlayPosName) {
+			playSongByPos(playList.length - 1);
+		}
+  	}
+
+    function handleItemRemoved(itemSnapshot) {
+		var i;
+		var removeName = itemSnapshot.name();
+		for (i = 0; i < playList.length; i++) {
+			if (playList[i].name == removeName) {
+				break;
+			}
+		}
+		if (i < playList.length) {
+			if (playPos > i) {
+				playPos = playPos - 1;
+			}
+			playList.splice(i, 1);
+		}
+    }
+
+	playListRef.on('child_added', function (newItemSnapshot, prevItemName) {
+	    handleItemAdded(newItemSnapshot, prevItemName);
+	});
+
+    playListRef.on('child_removed', function (oldItemSnapshot) {
+      	handleItemRemoved(oldItemSnapshot);
+    });
+
+	////////////////////////////////////////////////////////////
+	// Video component related functions
+	vid1.on("play", function(){
+		console.log("playing...");
+		playing = true;
+    });
+
+	vid1.on("pause", function(){
+		console.log("pausing...");
+		playing = false;
+    });
+
+    var tCycle = setInterval(function() {
+    	// Keep checking audio and video progress and keep them synced
+    	if (!playingYoutube && playing) {
+	    	var t0, t1, t2;
+	    	t0 = aud1.currentTime;
+	    	t1 = vid1.currentTime();
+	    	t2 = aud1.currentTime;
+	    	console.log("Video time: " + t1 + " and audio time: " + t0 + ", " + t2 + "; diff = " + Math.abs(t1 - t2));
+	    	if (Math.abs(t1 - t2) > 0.5) {
+	    		console.log("Syncing video time " + t1 + " and audio time " + t2);
+	    		aud1.currentTime = t1 + 0.03;
+		    	t1 = vid1.currentTime();
+	    		t2 = aud1.currentTime;
+	    		console.log("Synced video time " + t1 + " and audio time " + t2);
+	    	}
+	    }
+    }, 3000);
+
+	vid1.on("loadeddata", function(){
+		console.log("loadeddata...");
+		aud1.play();
+    });
+
+	vid1.on("ended", function(){
+		if (playPos < playList.length - 1) {
+			playPosNameRef.set(playList[playPos + 1].name);
+		} else {
+			playPosNameRef.set(playList[0].name);
+		}
+//		playSongByPos(playPos + 1);
+	});
+	
+</script>
+
+</body>
+</html>

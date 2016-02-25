@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Karaoke</title>
+	<!--  	<link rel="stylesheet" type="text/css" href="css/jquery.mobile-1.3.2.min.css"> -->
+	<!--  	<script src="js/jquery-1.10.2.min.js"></script> -->
+	<!--  	<script src="js/jquery.mobile-1.3.2.min.js"></script> -->
+
+  <script>
+  function getQueryVariable(variable) {
+    var query = window.location.search.substring(1);
+    var vars = query.split("&amp;");
+    for (var i=0;i<vars.length;i++) {
+      var pair = vars[i].split("=");
+      if (pair[0] == variable) {
+        return pair[1];
+      }
+    }
+    return -1;
+  }
+  var room = getQueryVariable("room");
+  if (room == -1 || room == '') {
+  	document.location = "index.html";
+  }
+
+	Array.prototype.getUnique = function(){
+	   var u = {}, a = [];
+	   for(var i = 0, l = this.length; i < l; ++i){
+	      if(u.hasOwnProperty(this[i])) {
+	         continue;
+	      }
+	      a.push(this[i]);
+	      u[this[i]] = 1;
+	   }
+	   return a;
+	}
+
+	Array.prototype.intersect = function(array2){
+		return this.filter(function(n) {
+    		return array2.indexOf(n) != -1
+		});
+	}
+
+	Array.prototype.minus = function(array2){
+		return this.filter(function(n) {
+    		return array2.indexOf(n) == -1
+		});
+	}
+ </script>
+
+	<link rel="stylesheet" href="css/jquery.mobile-1.3.2.min.css" />
+	<link rel="stylesheet" href="css/jquery.swipeButton.css" />
+
+	<script src="js/jquery-1.8.2.min.js"></script>
+	<script src="js/jquery.mobile-1.3.2.min.js"></script>
+	<script src="js/jquery.swipeButton-1.2.1.js"></script>
+	<script src="https://cdn.firebase.com/v0/firebase.js"></script>
+
+<!--	<script type="text/javascript" src="jsonp/all_info.jsonp"></script> -->
+<!--  	<script src="jsonp/songs.jsonp"></script> -->
+<!--	<script type='text/javascript' src='https://cdn.firebase.com/v0/firebase-simple-login.js'> </script> -->
+
+	<style>
+	ul li img.thumbnail {
+  background: #fff;
+  display: inline-block;
+  float: left;
+  padding: 0px;
+  margin-top: 2px;
+  margin-left: 2px;
+  margin-right: 4px;
+}
+.loading {
+	text-align:center;
+	}
+	</style>
+
+	<script type="text/javascript" charset="utf-8">
+		var lastSearchTerm = "";
+		var roomUrl = 'https://danioyuan.firebaseio.com/karaoke/rooms/' + encodeURIComponent(room);
+
+	  	// Create our Firebase reference
+	    var playListRef = new Firebase(roomUrl + '/playlist');
+	    var playPosNameRef = new Firebase(roomUrl + '/playposname');
+		var songPathRef = new Firebase('https://danioyuan.firebaseio.com/karaoke/songpath');
+		var songIndexRef = new Firebase('https://danioyuan.firebaseio.com/karaoke/songindex');
+		var singerIndexRef = new Firebase('https://danioyuan.firebaseio.com/karaoke/singerindex');
+	    var vocalRef = new Firebase(roomUrl + '/vocal');
+	    var volumeRef = new Firebase(roomUrl + '/volume');
+
+		var ajaxResponse = null;
+	    var playList = []; // keys of each playlist item
+		var playListIndex = []; // index (timestamp) of each playlist item
+	    var playPosName = '';  // key of the current playing item
+//	    var playPos = -1;
+		var all_singers = {};
+		var all_songs = {};
+		var searchResultSingers = [];
+		var searchResultSongs = [];
+		var cachedSearchResult = []; // cached when a singer is clicked
+		var cachedSearchResultSongs = [];
+
+	  	// Keep a mapping of firebase locations to HTML elements, so we can move / remove elements as necessary.
+	  	var htmlForPath = {};
+		var vocal = false;
+		var volume = 100;
+
+		var song_info = null;
+		var singer_info = null;
+		var path_info = null;
+		var singer_songs = null;
+		var song_index = null;
+		var singer_index = null;
+		
+		var tmpvar = null; // This is for debug only
+
+		function getIndexTerms(text) {
+			if (text.length == 0)
+				return [];
+			text = text.toLowerCase();
+			var i, a = 1, b = 2, terms = [];
+			var parts = text.split(' ');
+			if (parts.length > 1) {
+				var acronym = "";
+				for (i=0; i<parts.length; i++) {
+					acronym = acronym + parts[i].substring(0, 1);
+					terms.push(parts[i]);
+					terms = terms.concat(getIndexTerms(parts[i]));
+				}
+				terms.push(acronym);
+				return terms;
+			}
+			
+			if (text.charCodeAt(0) <= 255) {
+				a = 2;
+				b = 3;
+			} else {
+				// index every character pair in the text
+				for (i=1; i<text.length-1; i++)
+					terms.push(text.substring(i, i+2));
+			}
+			// index first length a to length b characters
+			for (i=a; i<=b; i++) {
+				if (text.length >= i)
+					terms.push(text.substring(0, i));
+			}
+
+			return terms;
+		}
+
+		function indexInfo(info) {
+			var index = {};
+			var i, j;
+			for (i = 0; i < info.name.length; i++) {
+				terms = getIndexTerms(info.name[i]);
+				terms = terms.concat(getIndexTerms(info.short_name[i]));
+				terms = terms.getUnique();
+				for (j = 0; j < terms.length; j++) {
+					if (index[terms[j]] == undefined)
+						index[terms[j]] = [i];
+					else
+						index[terms[j]].push(i);
+				}
+			}
+			return index;
+		}
+
+		$.getJSON("jsonp/all_info.json", function(data){
+			song_info = data.song_info;
+			singer_info = data.singer_info;
+			path_info = data.path_info;
+        	console.log("Loading done!");
+			// Index singer and song information for easy search
+			console.log("Indexing data!");
+			singer_songs = [];
+			var terms, i, j;
+			for (i = 0; i < song_info.singer_id.length; i++) {
+				if (singer_songs[song_info.singer_id[i]] == undefined)
+					singer_songs[song_info.singer_id[i]] = [i];
+				else
+					singer_songs[song_info.singer_id[i]].push(i);
+			}
+			song_index = indexInfo(song_info);
+			singer_index = indexInfo(singer_info);
+			console.log("Indexing done!");
+//			alert("Indexing done!" + song_info.name.length + "," + singer_info.name.length);
+			$("#searchBox").attr('placeholder', 'Type at least two letters to search...');
+			$("#searchBox").attr('readonly', false);
+			$("#loading").hide();
+    	});
+
+    	function restoreCachedSearchResult() {
+    		searchResultSongs = cachedSearchResultSongs.slice();
+    		$("#searchlist").find("li:gt(0)").remove();
+    		for (var i=0; i<cachedSearchResult.length; i++) {
+    			$("#searchlist").append(cachedSearchResult[i]);
+    		}
+    		$("#searchlist").listview("refresh");
+    	}
+		
+		function addSingerSongsToSearchResult(singer_id) {
+//			$.mobile.showPageLoadingMsg();
+			cachedSearchResult = $("#searchlist").find("li:gt(0)");
+			cachedSearchResult.remove();
+			cachedSearchResultSongs = searchResultSongs.slice();
+
+			searchResultSongs = [];
+			var newRow = $("<li data-icon='back'/>");
+			newRow.append($("<a href=# onclick='restoreCachedSearchResult()'/>").text('<- Back to search results'));
+			$("#searchlist").append(newRow);
+			
+			var id;
+			for (var i = 0; i < singer_songs[singer_id].length; i ++) {
+//			for (var i = 0; i < Math.min(singer_songs[singer_id].length, 50); i ++) {
+//				name = all_singers[sid].songs[i].name;
+//				id = all_singers[sid].songs[i].id;
+//				console.log("add song: " + name + ", " + id);
+//				all_songs[id.toString] = {"name": name, "id": id, "sid": sid};
+//				addSongToSearchResult(all_singers[sid].name, sid, name, id);
+				addSongToSearchResult(singer_songs[singer_id][i]);
+			}
+			$("#searchlist").listview("refresh");
+//			$.mobile.hidePageLoadingMsg();
+		}
+		
+		function addSongToPlayList(songInfo) {
+			var n = $('#playlist').children("li").length;
+			var recordRef = playListRef.push(songInfo);
+			// if (n <= 2) {
+			// 	var recordName = recordRef.split('/');
+			// 	recordName = recordName[recordName.length - 1];
+			// 	playPosNameRef.set(recordName);
+			// }
+		}
+
+		function addNormalSongToPlayList(song_id) {
+			var title = song_info.name[song_id] + " - " + singer_info.name[song_info.singer_id[song_id]];
+			var path = path_info[song_info.path_id[song_id]] + "/" + song_info.file_name[song_id];
+			addSongToPlayList({'title' : title, 'path' : path, 'index': Date.now()});
+/*			var songRef = songPathRef.child(all_songs[id].id);
+			songRef.on('value', function(snapshot) {
+				addSongToPlayList({'title' : name, 'path' : snapshot.val().fp});
+			});
+*/		}
+
+		function addYoutubeToPlayList(element) {
+			addSongToPlayList({'title' : element.getAttribute("video_title"),
+				'vid' : element.getAttribute("video_id"), 'thumbnail' : element.getAttribute("thumbnail"),
+				'index': Date.now()});
+		}
+
+		function addSingerToSearchResult(singer_id) {
+			console.log("Adding singer " + singer_id + " to search result list");
+			if (searchResultSingers.indexOf(singer_id) != -1) { return; }
+			var newRow = $("<li />");
+//			all_singers[info.sid.toString()] = {"name": singer_info.name[singer_id], "songs": info.songs};
+			newRow.append($("<a href=# onclick='addSingerSongsToSearchResult("+singer_id+")'/>").text(singer_info.name[singer_id]));
+			newRow.append($("<span class='ui-li-count'/>").text(singer_songs[singer_id].length));
+			$("#searchlist").append(newRow);
+			searchResultSingers.push(singer_id);
+//			$("#searchlist").listview("refresh");
+		}
+
+		function addSongToSearchResult(song_id) {
+			console.log("Adding song " + song_id + " to search result list");
+			if (searchResultSongs.indexOf(song_id) != -1) { return; }
+			var newRow = $("<li data-swipeurl='#' data-icon='plus'/>");
+			var title = song_info.name[song_id] + " - " + singer_info.name[song_info.singer_id[song_id]];
+//			all_songs[id.toString()] = {"name": song, "id": id, "sid": sid};
+//			if (!all_singers[sid]) {
+//				all_singers[sid.toString()] = {"name": singer, "songs": [{"name": song, "id": id, "sid": sid}]};
+//			}
+
+			var $rr = $("<a href=# onclick='addNormalSongToPlayList("+song_id+")'/>").text(title);
+		    newRow.append($rr);
+			newRow.bind('click', function() {
+				$( ".aSwipeButton" ).animate({ width: 'toggle' }, 200, function(e) {
+					$(this).remove();
+				});
+				var $swipeBtn = $('<a>Added</a>').attr({
+									'data-role': 'button',
+									'data-mini': true,
+									'data-inline': 'true',
+									'class': 'aSwipeButton aSwipeBtn',
+									'data-theme': 'e',
+									'href': '#'
+								});
+				// slide insert button into list item
+				$swipeBtn.prependTo(newRow).button();
+				$(this).find('.ui-btn').hide().animate({ width: 'toggle' }, 200);
+			});
+			$("#searchlist").append(newRow);
+			searchResultSongs.push(song_id);
+//			$("#searchlist").listview("refresh");
+		}
+/*
+		function addRowToSearchResult(sid, id) {
+			var name;
+			var newRow;
+			if (id < 0) {
+				newRow = $("<li />");
+				name = singers[sid].n;
+			    newRow.append($("<a href=# onclick='addSingerSongsToSearchResult("+sid+")'/>").text(name));
+			} else {
+				newRow = $("<li data-swipeurl='#' data-icon='plus'/>");
+				name = songs[id].n + " - " + singers[sid].n;
+				var $rr = $("<a href=# onclick='addNormalSongToPlayList("+id+")'/>").text(name);
+			    newRow.append($rr);
+				newRow.bind('click', function() {
+					var $swipeBtn = $('<a>Added</a>').attr({
+										'data-role': 'button',
+										'data-mini': true,
+										'data-inline': 'true',
+										'class': 'aSwipeButton aSwipeBtn',
+										'data-theme': 'e',
+										'href': '#'
+									});
+					// slide insert button into list item
+					$swipeBtn.prependTo(newRow).button();
+				});
+			}
+		    $("#searchlist").append(newRow);
+		}
+*/
+
+		function searchYoutubeByTerm(term) {
+			// API KEY: AIzaSyAY9lDILyX15FJAByfm3ZF4hHIjR3gRx4o
+			// GET https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=michael+jackson&key=AIzaSyAY9lDILyX15FJAByfm3ZF4hHIjR3gRx4o
+
+			console.log("searching youtube for " + term);
+			var yt_url = "https://www.googleapis.com/youtube/v3/search";
+			var yt_key = "key=AIzaSyAY9lDILyX15FJAByfm3ZF4hHIjR3gRx4o";
+			var yt_parameters = "part=snippet&maxResults=10&type=video&videoEmbeddable=true";
+			var yt_query = "q=" + encodeURIComponent(term);
+			var yt_url = yt_url + "?" + yt_key + "&" + yt_parameters + "&" + yt_query;
+			$.ajax
+			({
+				type: "GET",
+				url: yt_url,
+				dataType:"jsonp",
+				success: function(response)
+				{
+					ajaxResponse = response;
+					if(response.items)
+					{
+						var newRow = $("<li data-role='list-divider'>Youtube Search Results</li>");
+						$("#searchlist").append(newRow);
+						$.each(response.items, function(i,data)
+						{
+							var video_id=data.id.videoId;
+							var video_title=data.snippet.title;
+//							var video_viewCount=data.viewCount;
+							var thumbnail=data.snippet.thumbnails.default.url;
+							var newRow = $("<li data-swipeurl='#' data-icon='plus' />");
+//							var name = video_title;
+							var id = -1;
+							var $rr = $("<a href=# video_title=\"" + video_title.replace(/"/g, "''") + "\" video_id=\"" + video_id + "\" thumbnail=\"" + thumbnail + "\" onclick='addYoutubeToPlayList(this);'/>").text(video_title);
+							newRow.append($("<img height=35 src='" + thumbnail + "' class='thumbnail'>"));
+							newRow.append($rr);
+							newRow.bind('click', function() {
+								var $swipeBtn = $('<a>Added</a>').attr({
+									'data-role': 'button',
+									'data-mini': true,
+									'data-inline': 'true',
+									'class': 'aSwipeButton aSwipeBtn',
+									'data-theme': 'e',
+									'href': '#'
+								});
+								// slide insert button into list item
+								$swipeBtn.prependTo(newRow).button();
+								$(this).find('.ui-btn').hide().animate({ width: 'toggle' }, 200);
+							});
+							$("#searchlist").append(newRow);
+						});
+						$("#searchlist").listview("refresh");
+					}
+				}
+			});
+		}
+
+		function getSongsForSingers(singer_ids) {
+			var songs = [];
+			for (var i=0; i<singer_ids.length; i++)
+				songs = songs.concat(singer_songs[singer_ids[i]]);
+			return songs.getUnique();
+		}
+
+		function getSingersForSongs(song_ids) {
+			var singers = [];
+			for (var i=0; i<song_ids.length; i++) {
+				singers.push(song_info.singer_id[song_ids[i]]);
+			}
+			return singers.getUnique();
+		}
+
+		function searchTermByIndex(term, index, info) {
+			var i, j;
+			var results = [], tmp;
+			if (term == '')
+				return [];
+			if (index[term] != undefined)
+				return index[term];
+			var a = 1, b = 2;
+			if (term.charCodeAt(0) <= 255) {
+				a = 2;
+				b = 3;
+			}
+			var subterm;
+			if (term.length > b)
+				subterm = term.substring(0, b);
+			else if (term.length > a)
+				subterm = term.substring(0, a);
+			tmp = index[subterm];
+			if (tmp == undefined)
+				return [];
+			for (i=0; i<tmp.length; i++) {
+				j = tmp[i];
+				if (term.charCodeAt(0) <= 255) {
+					if (info.name[j].substring(0, term.length) == term ||
+						info.short_name[j].substring(0, term.length) == term)
+						results.push(j);
+				} else {
+					if (info.name[j].indexOf(term) != -1 || info.short_name[j].indexOf(term) != -1)
+						results.push(j);
+				}
+			}
+			return results;
+		}
+
+		function searchText(text) {
+			text = text.toLowerCase();
+			var terms = text.split(' ');
+			var i, j;
+			var singer_results = [], song_results = [], singer_song_results = [];
+			var song_ids = [], singer_ids = [], si_by_so = [], so_by_si = [], si, so;
+			/*
+				Rule of Merge:
+				If there is only one term, show songs, then show singers. Sort by string similarity.
+				If there are multiple terms, songs should be the intersect of the songs + singer_songs
+				for each term, singers should be the intersect of singers + song_singers of each term.
+				For example, zxy hits songs 1, 2 and singer A, llh hits songs 3, 4, 5 and no singer.
+				Song 3 is by singer A. The result should show song 3 and singer A.
+			*/ 
+			for (i=0; i<terms.length; i++) {
+				so = searchTermByIndex(terms[i], song_index, song_info);
+				si = searchTermByIndex(terms[i], singer_index, singer_info);
+				$("#searchlisttitle").text(terms[i]);
+				song_ids = song_ids.concat(so);
+				singer_ids = singer_ids.concat(si);
+				if (i == 0) {
+					so_by_si = so.concat(getSongsForSingers(si)).getUnique();
+					si_by_so = si.concat(getSingersForSongs(so)).getUnique();
+				} else {
+					so_by_si = so_by_si.intersect(so.concat(getSongsForSingers(si)).getUnique());
+					si_by_so = si_by_so.intersect(si.concat(getSingersForSongs(so)).getUnique());
+				}
+			}
+			song_ids = song_ids.getUnique().intersect(so_by_si);
+			singer_ids = singer_ids.getUnique().intersect(si_by_so);
+			return {song_ids: song_ids, singer_ids: singer_ids};
+		}
+
+		$(document).bind('pageinit', function() {
+		    $(document).on('tap', function(e){
+		        $('.ui-btn').removeClass($.mobile.activeBtnClass);
+		    });
+		});
+		
+		$(document).ready(function() {
+/*			$('#youtube_search_result').on('click', function(){
+				alert($(this).video_title);
+				playListRef.push({'title' : $(this).video_title, 'vid' : $(this).video_id, 'thumbnail' : $(this).thumbnail});
+    		});
+*/
+			// triggerMe is a button only used for debuggin on a computer because swipe is hard
+			$('#triggerMe').on('click', function(){
+				$('#playlist li:nth-child(3)').trigger('swiperight')
+			});
+			
+			$('#volume_slider').on( "slidestop", function(e) {
+				var val = $(this).val();
+				console.log("Volume set to " + val);
+				volumeRef.set(val);
+			});
+			
+			$('#vocalButton').click(function() {
+				vocalRef.set(!vocal);
+			});
+
+			$('#skipButton').click(function() {
+				var i = playList.indexOf(playPosName);
+				if (i < playList.length - 1) {
+					playPosNameRef.set(playList[i + 1]);
+				} else {
+					playPosNameRef.set(playList[0]);
+				}
+			});
+
+			$('#controlViewButton').click(function() {
+				$('#controlView').show();
+				$('#playlistView').hide();
+				$('#searchView').hide();
+			});
+
+			$('#playlistViewButton').click(function() {
+				$('#playlistView').show();
+				$('#controlView').hide();
+				$('#searchView').hide();
+			});
+
+			$('#searchViewButton').click(function() {
+				if ($('#searchView').is(':visible'))
+					$.mobile.silentScroll(0)
+				else {
+					$('#searchView').show();
+					$('#playlistView').hide();
+					$('#controlView').hide();
+				}
+			});
+			
+
+			var global_search_id = 0;
+			function goSearchTerm(term, search_id) {
+//				window.setTimeout(function() {
+//	$.mobile.showPageLoadingMsg();
+					if (search_id != global_search_id) {
+						console.log("search " + search_id + " skipped" + global_search_id);
+						return;
+					}
+					console.log("search " + search_id + " running " + global_search_id);
+					$("#searchlist").find("li:gt(0)").remove();
+					searchResultSongs = [];
+					searchResultSingers = [];
+
+					console.log("Searching: " + term);
+					// Search songs
+					var result = searchText(term.trim().toLowerCase())
+					var i;
+
+//					alert("Result " + result.singer_ids.length + "," + result.song_ids.length);
+					console.log("Searching: " + term + " done!");
+					for (i=0; i<result.singer_ids.length; i++) {
+						addSingerToSearchResult(result.singer_ids[i]);
+					}
+					for (i=0; i<result.song_ids.length; i++) {
+						addSongToSearchResult(result.song_ids[i]);
+					}
+/*
+					var singerQuery = singerIndexRef.startAt(null, term).limit(10);
+					singerQuery.on("child_added", function(snapshot) {
+						if (search_id != global_search_id) {
+							console.log("search result " + search_id + " skipped " + global_search_id);
+							return;
+						}
+						var singer = snapshot.name();
+						var info = snapshot.val();
+						if (singer.indexOf(term) != -1) {
+							console.log(singer);
+							console.log(info);
+							var ks = Object.keys(info);
+							for (var j = 0; j < ks.length; j++) {
+								addSingerToSearchResult(ks[j], info[ks[j]]);
+							}
+						}
+					});
+
+					var songQuery = songIndexRef.startAt(null, term).limit(20);
+					songQuery.on("child_added", function(snapshot) {
+						if (search_id != global_search_id) {
+							console.log("search result " + search_id + " skipped " + global_search_id);
+							return;
+						}
+						var song = snapshot.name();
+						var info = snapshot.val();
+						if (song.indexOf(term) != -1) {
+							console.log(song);
+							console.log(info);
+							for (var j = 0; j < info.length; j++) {
+								addSongToSearchResult(info[j].singer, info[j].sid, info[j].name, info[j].id);
+							}
+						}
+					});
+*/
+					searchYoutubeByTerm(term + " " + $("#youtube_term").val());
+					lastSearchTerm = term;
+					$("#searchlist").listview("refresh");
+//					$.mobile.hidePageLoadingMsg();
+
+//				}, 1500);
+			}
+
+//			$('#searchBox').bind('keyup change', function() {
+			$('#searchBox').bind('keypress', function(e) {
+				if ((e.keyCode || e.which) == 13) {
+					global_search_id += 1;
+					var term = $('#searchBox').val().toLowerCase().trim();
+					if (term == lastSearchTerm) {
+						return;
+					}
+					if (/^[a-zA-Z0-9\-_]*$/.test(term)){
+						if (term.length < 2) {
+							return;
+						}
+					} else if (term.length < 1) {
+						return;
+					}
+					goSearchTerm(term, global_search_id);
+				}
+//				$("#searchlist").listview("refresh");
+			});
+
+		});
+	</script>
+
+</head> 
+<body> 
+	<div data-role="page">
+		<div data-role="header">
+			<h1>Karaoke</h1>
+		</div>
+
+		<div data-role="content">
+			<div id="controlView" style="display:none">
+				<div data-role="fieldcontain">
+					<label for="volume_slider">Volume:</label>
+					<input type="range" name="volume_slider" id="volume_slider" data-highlight="true" min="0" max="100" value="100">
+				</div>
+				<div data-role="fieldcontain">
+					<label for="youtube_term">Youtube search term:</label>
+					<input type="text" name="youtube_term" id="youtube_term" value="karaoke" data-mini="true"/>
+				</div>
+		    </div>
+
+			<div id="playlistView">
+				<ul id="playlist" data-role="listview">
+					<li data-role="list-divider">Play List</li>
+					
+				</ul><br />
+            <!-- <a href="#" data-role="button" id="triggerMe">trigger swipe right</a> -->
+								
+			</div>
+			<div id="searchView" style="display:none">
+				<input id='searchBox' type=search placeholder='Loaing data, please wait...' readOnly=true/><br />
+				<ul id="searchlist" data-role="listview">
+					<li id="searchlisttitle" data-role="list-divider">Karaoke Search Results</li>
+				</ul><br />
+			</div>
+		<div id="loading" class="loading"><img src="css/images/loading43.gif"></div>
+					
+		</div>
+		<div data-role=footer data-position=fixed>
+		   <div data-role=navbar>
+		      <ul>
+			      <li><a id='controlViewButton' href=# data-icon=grid>Controls</a></li>
+			      <li><a id='vocalButton' href=# data-icon=delete>Vocal</a></li>
+			      <li><a id='skipButton' href=# data-icon=forward>Skip</a></li>
+		      	  <li><a id='playlistViewButton' href=# data-icon=bars>Playlist</a></li>
+    		      <li><a id='searchViewButton' href=# data-icon=search>Search</a></li>
+		      </ul>
+		   </div>
+		</div>
+		
+	</div>
+		
+	
+	<script>
+		// I'm trying to hide Play button when click outside of the list, but does not work
+//		$('#playlistView').on("click", function(e) {
+//			var target = $( e.target )
+//			if ( !target.is( "li" ) ) {
+//				$( ".aSwipeButton" ).animate({ width: 'toggle' }, 200, function(e) {
+//					$(this).remove();
+//				});
+//			}
+//		})
+			
+	  ////////////////////////////////////////////////////////////
+	  // Firebase play position change related functions
+	  playPosNameRef.on('value', function(dataSnapshot) {
+	  	var itemName = dataSnapshot.val();
+	  	console.log("New name: " + itemName + "; current name: " + playPosName);
+	  	if (itemName == playPosName) { return; }
+	  	var i;
+
+	  	if (playPosName != '') {
+		    i = playList.indexOf(playPosName);
+
+    	  	console.log("List: " + playList.length + "; " + i);
+		  	if (i >= 0 && i < playList.length) {
+		  		var item = $('#playlist li:nth-child(' + (i+2) + ')').find('a.ui-link-inherit');
+		  		var text = item.text();
+		  		if (text.substring(0, 4) == ">>> ") {
+			  		item.text(text.substring(4));
+			  	}
+		  	}
+		}
+	  	playPosName = itemName;
+		i = playList.indexOf(itemName);
+	  	console.log("List: " + playList.length + "; " + i);
+	  	if (i >= 0 && i < playList.length) {
+	  		var item = $('#playlist li:nth-child(' + (i+2) + ')').find('a.ui-link-inherit');
+	  		var text = item.text();
+	  		item.text('>>> ' + text);
+	  	}
+	  });
+
+	  // Helper function that takes a new score snapshot and adds an appropriate row to our leaderboard table.
+	  function handlePlayListItemAdded(snapshot, prevName) {
+	    var itemName = snapshot.name();
+		var index = snapshot.val().index;
+	    var title = snapshot.val().title;
+		if (index == null) {
+			// this part is to handle older playlists that do not have index field
+			var ref = new Firebase(roomUrl + '/playlist/' + itemName);
+			index = Date.now();
+			console.log("Set index of " + itemName + " to " + index);
+			ref.child('index').set(index);
+			return;
+		}
+		for (var insertPos=0; insertPos<playListIndex.length; insertPos++)
+			if (index < playListIndex[insertPos])
+				break;
+		var prevItemName = null;
+		if (insertPos > 0)
+			prevItemName = playList[insertPos-1];
+		playList.splice(insertPos, 0, itemName);
+		playListIndex.splice(insertPos, 0, index);
+//	    playList.push(itemName);
+//		playListIndex.push(index);
+		console.log("item added to playlist: " + title);
+	    if (playList.length == 1 && (playPosName == null || playPosName == '')) {
+			// Start playing if this is the only song in the list
+			// Note that every new controller log in would trigger this condition
+	    	playPosNameRef.set(itemName);
+	    	playPosName = itemName;
+	    }
+	    if (itemName == playPosName) {
+	    	title = ">>> " + title;
+	    }
+	    
+		var newRow = $("<li data-icon='false' firebase-id=" + itemName + " data-swipeurl='#'/>");
+	    var thumbnail = snapshot.val().thumbnail;
+	    if (thumbnail) {
+			newRow.append($("<img height=35 src='" + thumbnail + "' class='thumbnail'>"));
+	    }
+		newRow.append($("<a href='#'/>").text(title));
+
+	    // Store a reference to the table row so we can get it again later.
+	    htmlForPath[itemName] = newRow;
+
+	    // Insert the new score in the appropriate place in the table.
+		if (insertPos == 0) {
+			console.log("Inserting at 0");
+			$('#playlist li:eq(0)').after(newRow);
+			console.log($('#playlist'));
+		}
+		else {
+			console.log("Inserting at " + insertPos);
+			$('#playlist li:eq(' + insertPos + ')').after(newRow);
+			console.log($('#playlist'));
+		}
+//			newRow.insertAfter($('li:contains("' + prevItemName + '")'));
+//		$("#playlist").append(newRow);
+		
+		// Add swipe delete and click functions
+		newRow.swipeDelete({
+			btnTheme: 'e',
+			btnLabel: 'Delete',
+			btnClass: 'aSwipeButton',
+			click: function(e){
+				e.preventDefault();
+				var itemName = $(this).parents('li').attr('firebase-id');
+				var i = playList.indexOf(itemName);
+				if (itemName == playPosName) {
+					console.log("i: " + playList[i] + "; i+1: " + playList[i + 1]);
+					if (i < playList.length - 1) {
+						playPosNameRef.set(playList[i + 1]);
+					} else if (playList.length > 1) {
+						playPosNameRef.set(playList[0]);
+					} else {
+						playPosNameRef.set('');
+					}
+				}
+				var ref = new Firebase(roomUrl + '/playlist/' + itemName);
+				ref.remove();
+			}
+		});
+		
+		newRow.bind('click', function() {
+			var cnt = $('.ui-btn', $(this)).length;
+			$( ".aSwipeButton" ).animate({ width: 'toggle' }, 200, function(e) {
+				$(this).remove();
+			});
+			if (!cnt) {
+			var $swipeBtn = $('<a>Play</a>').attr({
+									'data-role': 'button',
+									'data-mini': true,
+									'data-inline': 'true',
+									'class': 'aSwipeButton aSwipeBtn',
+									'data-theme': 'e',
+									'href': '#'
+								})
+								.on('click tap', function(e){
+									var itemName = $(this).parents('li').attr('firebase-id');
+									playPosNameRef.set(itemName);
+									playPosName = itemName;
+								});
+				// slide insert button into list item
+				$swipeBtn.prependTo(newRow).button();
+				$(this).find('.ui-btn').hide().animate({ width: 'toggle' }, 200);
+				var $swipeBtn = $('<a>Insert</a>').attr({
+									'data-role': 'button',
+									'data-mini': true,
+									'data-inline': 'true',
+									'class': 'aSwipeButton aSwipeBtn',
+									'data-theme': 'e',
+									'href': '#'
+								})
+								.on('click tap', function(e){
+									var i = playList.indexOf(playPosName);
+									var index;
+									if (i >= playList.length - 1)
+										index = playListIndex[i] + 100;
+									else
+										index = (playListIndex[i] + playListIndex[i+1])/2;
+
+									var itemName = $(this).parents('li').attr('firebase-id');
+									console.log("Set index of " + itemName + " to " + index);
+									var ref = new Firebase(roomUrl + '/playlist/' + itemName);
+									ref.child('index').set(index);
+								});
+				// slide insert button into list item
+				$swipeBtn.prependTo(newRow).button();
+				$(this).find('.ui-btn').hide().animate({ width: 'toggle' }, 200);
+			}
+		});
+		
+/*		
+		newRow.clickPlay({
+			btnTheme: 'e',
+			btnLabel: 'Play',
+			btnClass: 'aSwipeButton',
+			click: function(e){
+				var name = $(this).parents('li').attr('firebase-id');
+				playPosNameRef.set(name);
+				playPosName = name;
+			}
+		});
+*/
+	    $("#playlist").listview("refresh");
+	  }
+
+	  // Helper function to handle a score object being removed; just removes the corresponding table row.
+	  function handlePlayListItemRemoved(snapshot) {
+	  	var itemName = snapshot.name();
+	    var removedRow = htmlForPath[itemName];
+	    removedRow.remove();
+	    delete htmlForPath[itemName];
+	    var i = playList.indexOf(itemName);
+	    if (i >= 0) {
+			playList.splice(i, 1);
+			playListIndex.splice(i, 1);
+		}
+	  }
+
+	  // Add a callback to handle when a new score is added.
+	  playListRef.on('child_added', function (newSnapshot, prevName) {
+	    handlePlayListItemAdded(newSnapshot, prevName);
+	  });
+
+	  // Add a callback to handle when a score is removed
+	  playListRef.on('child_removed', function (oldSnapshot) {
+	    handlePlayListItemRemoved(oldSnapshot);
+	  });
+
+	  // Add a callback to handle when a score changes or moves positions.
+	  var changedCallback = function (snapshot, prevName) {
+	    handlePlayListItemRemoved(snapshot);
+	    handlePlayListItemAdded(snapshot, prevName);
+	  };
+//	  playListRef.on('child_moved', changedCallback);
+	  playListRef.on('child_changed', changedCallback);
+
+	  vocalRef.on('value', function(dataSnapshot) {
+		vocal = dataSnapshot.val();
+		if (!vocal) {
+			vocal = false;
+			$('#vocalButton').find('.ui-icon')
+							 .addClass('ui-icon-delete')
+			                 .removeClass('ui-icon-check');
+		} else {
+			vocal = true;
+			$('#vocalButton').find('.ui-icon')
+		                     .addClass('ui-icon-check')
+		                     .removeClass('ui-icon-delete');
+		}
+		$('#vocalButton').parent('li').removeClass("ui-btn-active");
+	  });
+
+	  volumeRef.on('value', function(dataSnapshot) {
+		volume = dataSnapshot.val();
+		if (volume == null) {
+			volumeRef.set(50);
+		}
+		console.log("Firebase setting volume to " + volume);
+		// Control volume slider
+		$("#volume_slider").val(volume).slider("refresh");
+	  });
+
+	</script>
+	
+</body>
+</html>
