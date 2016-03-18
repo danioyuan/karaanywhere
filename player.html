@@ -142,7 +142,7 @@
 
 	function clearYoutubePlayer() {
 		try {
-			player.loadVideoById('', 0, "small");
+			player.loadVideoById('', 0, "default");
 		}
 		catch (err) {
 	   		console.log("YT player not ready: " + err.message);
@@ -170,7 +170,7 @@
 				try {
 					playingYoutube = true;
 					player.setVolume(volume);
-					player.loadVideoById(playList[i].vid, 0, "small");
+					player.loadVideoById(playList[i].vid, 0, "default");
 					playCount ++;
 				}
 			    catch (err) {
